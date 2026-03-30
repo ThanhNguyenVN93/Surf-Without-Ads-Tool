@@ -1,0 +1,111 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [ main, develop ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    name: Build Application
+    
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v3
+    
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v1.1
+    
+    - name: Setup NuGet
+      uses: NuGet/setup-nuget@v1
+    
+    - name: Restore NuGet packages
+      run: nuget restore frmdnschange.sln
+    
+    - name: Build Solution (Debug)
+      run: msbuild frmdnschange.sln /p:Configuration=Debug /p:Platform="Any CPU"
+    
+    - name: Build Solution (Release)
+      run: msbuild frmdnschange.sln /p:Configuration=Release /p:Platform="Any CPU"
+    
+    - name: Upload Debug Artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: frmdnschange-debug
+        path: bin/Debug/frmdnschange.exe
+    
+    - name: Upload Release Artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: frmdnschange-release
+        path: bin/Release/frmdnschange.exe
+
+  create-release:
+    needs: build
+    runs-on: ubuntu-latest
+    name: Create Release Package
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v3
+    
+    - name: Download Release Build
+      uses: actions/download-artifact@v3
+      with:
+        name: frmdnschange-release
+        path: ./release
+    
+    - name: Create Release Package
+      run: |
+        mkdir -p release_package
+        cp release/frmdnschange.exe release_package/
+        cp README.md release_package/
+        cp LICENSE release_package/
+        cp CHANGELOG.md release_package/
+        cp CONTRIBUTING.md release_package/
+        cp BUILDING.md release_package/
+        cp RELEASE_NOTES.md release_package/
+        cd release_package
+        zip -r ../frmdnschange-${{ github.ref_name }}.zip .
+    
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: frmdnschange-${{ github.ref_name }}.zip
+        body_path: RELEASE_NOTES.md
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  test:
+    runs-on: windows-latest
+    name: Test Build
+    
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v3
+    
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v1.1
+    
+    - name: Verify .NET Framework 3.5
+      run: |
+        $frameworks = Get-ChildItem "HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP" -Recurse | 
+            Get-ItemProperty -Name Version -ErrorAction SilentlyContinue
+        Write-Output "Installed .NET Frameworks:"
+        $frameworks | ForEach-Object { Write-Output $_.Version }
+    
+    - name: Build and Check for Errors
+      run: |
+        msbuild frmdnschange.sln /p:Configuration=Release /p:Platform="Any CPU" /verbosity:minimal
+        if ($LASTEXITCODE -ne 0) { 
+            Write-Error "Build failed"
+            exit 1
+        }
+        Write-Output "Build completed successfully"
